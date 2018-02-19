@@ -4,6 +4,8 @@
 #include <ifaddrs.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <netinet/ether.h>
+#include <netinet/ip.h>
 #include <net/ethernet.h>
 #include <netpacket/packet.h> 
 #include <sys/socket.h> 
@@ -89,13 +91,35 @@ int main()
         if(recvaddr.sll_pkttype == PACKET_OUTGOING)
             continue;
         //start processing all others
-        printf("Got a %d byte packet\n", n);
-
+        //printf("Got a %d byte packet\n", n);
+        
         //what else to do is up to you, you can send packets with send,
         //just like we used for TCP sockets (or you can use sendto, but it
         //is not necessary, since the headers, including all addresses,
         //need to be in the buffer you are sending)
+        
+        
+        
+        /** My code starts here. */
+        
+        struct ether_header eh;
+        
+        /* Copy address of buf[0] to address of eh. */
+			memcpy(&eh, &buf[0], 14);
+        
+        int p_type = ntohs(eh.ether_type);
+        
+        /* Check if ARP header. */
+        if (p_type == 0x806)
+			{
+				printf("> Got an ARP packet.\n");
+                
+			}
+        
+        /** End of my code */
 
+        
+        
     }
     //free the interface list when we don't need it anymore
     freeifaddrs(ifaddr);
