@@ -28,7 +28,7 @@ int main()
         perror("getifaddrs");
         return 1;
     }
-    
+
     //have the list, loop over the list
     for (tmp = ifaddr; tmp != NULL; tmp = tmp -> ifa_next)
     {
@@ -92,34 +92,39 @@ int main()
             continue;
         //start processing all others
         //printf("Got a %d byte packet\n", n);
-        
+
         //what else to do is up to you, you can send packets with send,
         //just like we used for TCP sockets (or you can use sendto, but it
         //is not necessary, since the headers, including all addresses,
         //need to be in the buffer you are sending)
-        
-        
-        
+
+
+
         /** My code starts here. */
-        
+
         struct ether_header eh;
-        
+
         /* Copy address of buf[0] to address of eh. */
-			memcpy(&eh, &buf[0], 14);
-        
+        memcpy(&eh, &buf[0], 14);
+
         int p_type = ntohs(eh.ether_type);
-        
+
         /* Check if ARP header. */
         if (p_type == 0x806)
-			{
-				printf("> Got an ARP packet.\n");
-                
-			}
-        
+        {
+            printf("> Got an ARP packet.\n");
+
+            /* Get MAC of interface. */
+            struct sockaddr_ll *s = (struct sockaddr_ll*)(ifaddr -> ifa_addr);
+            int host_mac;
+            memcpy(&host_mac, s -> sll_addr, 6);
+            printf("Unformatted MAC: %d\n", host_mac);
+        }
+
         /** End of my code */
 
-        
-        
+
+
     }
     //free the interface list when we don't need it anymore
     freeifaddrs(ifaddr);
