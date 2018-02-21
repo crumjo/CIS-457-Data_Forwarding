@@ -14,6 +14,7 @@
 #include <sys/select.h>
 #include <sys/ioctl.h>
 #include <net/if.h>
+#include <netinet/ip_icmp.h>
 
 struct reply
 {
@@ -25,7 +26,7 @@ struct icmp_reply
 {
     struct ether_header eh;
     struct iphdr ip;
-    struct icmphdr x; 
+    struct icmphdr ix;
 };
 
 void build_reply(struct reply* r, struct ether_header *eh, struct ether_arp *arp_frame, uint8_t dmac[6])
@@ -37,10 +38,28 @@ void build_reply(struct reply* r, struct ether_header *eh, struct ether_arp *arp
     r->ea.ea_hdr.ar_op=htons(ARPOP_REPLY);
     memcpy(&r->ea.arp_tha, &arp_frame->arp_sha, 6);/////
     memcpy(&r->ea.arp_tpa, &arp_frame->arp_spa, 4);
-    memcpy(&r->ea.arp_sha, &arp_frame->arp_tha, 6);
+    memcpy(&r->ea.arp_sha, &dmac, 6);
     memcpy(&r->ea.arp_spa, &arp_frame->arp_tpa, 4);
     
     memcpy(&r->eh, eh, sizeof(struct ether_header));
+}
+
+void build_icmp_reply(struct icmp_reply* r, struct ether_header *eh, struct iphdr *ip, struct icmphdr *x)
+{
+    printf("%ld", sizeof(struct icmphdr));
+    memcpy(&r->eh, eh, sizeof(struct ether_header));
+    memcpy(&r->ip, ip, sizeof(struct iphdr));
+    memcpy(&r->ix, x, sizeof(struct icmphdr));
+
+    // uint32_t temp = r->ip.daddr;
+    // r->ip.daddr = r->ip.saddr;
+    // r->ip.saddr = temp;
+
+    // uint8_t* temp2 = r->eh.ether_shost;
+    // memcpy(&r->eh.ether_shost, &r->eh.ether_dhost, sizeof(uint8_t)*6);
+    // memcpy (&r->eh.ether_dhost, &temp2, sizeof(uint8_t)*6);
+
+    r->ix.type = ICMP_ECHOREPLY;
 }
 
 void get_dst_ip(struct ifaddrs *ifaddr, struct ifaddrs *tmp, uint8_t arp_tpa[4], int socket, uint8_t dmac[6])
@@ -63,9 +82,11 @@ void get_dst_ip(struct ifaddrs *ifaddr, struct ifaddrs *tmp, uint8_t arp_tpa[4],
                 ioctl(socket, SIOCGIFHWADDR, &ifr);
                 for( int i = 0; i < 6; i++ )
                 {
-                    printf("%u ", (unsigned char)ifr.ifr_hwaddr.sa_data[i]);
+                    //printf("%u ", (unsigned char)ifr.ifr_hwaddr.sa_data[i]);
+                    dmac[i] = (uint8_t)(unsigned char)ifr.ifr_hwaddr.sa_data[i];
+                    //printf("%x ", dmac[i]);
                 }
-                printf("\n");
+                //printf("\n");
             }
         }
     }
@@ -153,14 +174,9 @@ int main()
 
                 struct ether_header* eh = (struct ether_header*)malloc(sizeof(struct ether_header));
                 struct ether_arp* arp_frame = (struct ether_arp*) (buf+14);
-                /* Copy address of buf[0] to address of eh. */
-                if ((((buf[12]) << 8) + buf[13]) != ETH_P_ARP) 
-                    continue;
-
-                /* skip to the next frame if it's not an ARP REPLY */
-                if (ntohs (arp_frame->arp_op) != ARPOP_REQUEST)
-                    continue;
-
+                struct iphdr* ip = (struct iphdr*)(buf+14);
+                struct icmphdr* x = (struct icmphdr*) (buf+14+20);
+                
                 memcpy(eh, &buf[0], 14);
                 
                 int p_type = ntohs(eh->ether_type);
@@ -168,25 +184,22 @@ int main()
                 //Check if IPv4 header
                 if (p_type == 0x0800)
                 {
-                    
+                    printf("got an IPv4 packet!\n");
+                    struct icmp_reply *r = (struct icmp_reply*)malloc(sizeof(struct icmp_reply));
+                    build_icmp_reply(r, eh, ip, x);
+
+                    send (i, r, sizeof(struct icmp_reply), 0);
                 }
                 
                 /* Check if ARP header. */
                 if (p_type == 0x0806)
                 {
-                    struct ether_addr src, dst;
-                    memcpy(&dst, eh->ether_dhost, sizeof(dst));
-                    memcpy(&src, eh->ether_shost, sizeof(src));
-
-                    printf("> Got an ARP packet from %d\n", i);
-                    printf(">Src : %s\n", ether_ntoa(&src));
-                    printf(">Dst : %s\n", ether_ntoa(&dst));
-
+                    printf("Got an arp packet\n");
                     uint8_t dmac[6];
                     struct reply *r = (struct reply*)malloc(sizeof(struct reply));
                     get_dst_ip(ifaddr, tmp, arp_frame->arp_tpa, i, dmac);
                     build_reply(r,eh,arp_frame, dmac);
-                    
+                    printf("Sent an arp reply\n");
                     send(i, r, sizeof(struct reply), 0);
 
                     free(r);
