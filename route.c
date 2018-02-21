@@ -22,6 +22,19 @@ struct reply
     struct ether_arp ea;
 };
 
+struct icmp_header
+{
+    u_int8_t type;		/* message type */
+    u_int8_t code;		/* type sub-code */
+    u_int16_t checksum;
+    u_int16_t	id;
+    u_int16_t	sequence;
+    u_int32_t	gateway;	/* gateway address */
+    u_int16_t	__unused;
+    u_int16_t	mtu;
+
+};
+
 struct icmp_reply
 {
     struct ether_header eh;
@@ -42,24 +55,6 @@ void build_reply(struct reply* r, struct ether_header *eh, struct ether_arp *arp
     memcpy(&r->ea.arp_spa, &arp_frame->arp_tpa, 4);
     
     memcpy(&r->eh, eh, sizeof(struct ether_header));
-}
-
-void build_icmp_reply(struct icmp_reply* r, struct ether_header *eh, struct iphdr *ip, struct icmphdr *x)
-{
-    printf("%ld", sizeof(struct icmphdr));
-    memcpy(&r->eh, eh, sizeof(struct ether_header));
-    memcpy(&r->ip, ip, sizeof(struct iphdr));
-    memcpy(&r->ix, x, sizeof(struct icmphdr));
-
-    // uint32_t temp = r->ip.daddr;
-    // r->ip.daddr = r->ip.saddr;
-    // r->ip.saddr = temp;
-
-    // uint8_t* temp2 = r->eh.ether_shost;
-    // memcpy(&r->eh.ether_shost, &r->eh.ether_dhost, sizeof(uint8_t)*6);
-    // memcpy (&r->eh.ether_dhost, &temp2, sizeof(uint8_t)*6);
-
-    r->ix.type = ICMP_ECHOREPLY;
 }
 
 void get_dst_ip(struct ifaddrs *ifaddr, struct ifaddrs *tmp, uint8_t arp_tpa[4], int socket, uint8_t dmac[6])
@@ -174,9 +169,9 @@ int main()
 
                 struct ether_header* eh = (struct ether_header*)malloc(sizeof(struct ether_header));
                 struct ether_arp* arp_frame = (struct ether_arp*) (buf+14);
-                struct iphdr* ip = (struct iphdr*)(buf+14);
-                struct icmphdr* x = (struct icmphdr*) (buf+14+20);
-                
+                //struct iphdr* ip = (struct iphdr*) (buf+14);
+                //struct icmphdr* x = (struct icmphdr*) (buf+14+20);
+                unsigned char* ireply = (unsigned char*)malloc(sizeof(unsigned char)*98);
                 memcpy(eh, &buf[0], 14);
                 
                 int p_type = ntohs(eh->ether_type);
@@ -185,10 +180,23 @@ int main()
                 if (p_type == 0x0800)
                 {
                     printf("got an IPv4 packet!\n");
-                    struct icmp_reply *r = (struct icmp_reply*)malloc(sizeof(struct icmp_reply));
-                    build_icmp_reply(r, eh, ip, x);
+                    uint8_t tmp = ICMP_ECHOREPLY;
+                    memcpy(ireply, &buf, 98);
+                    memcpy(ireply+14+20, &tmp, sizeof(uint8_t));
+                    //iphdr swap
+                    uint32_t tmp2;
+                    memcpy(&tmp2,ireply+14+12, sizeof(uint32_t));
+                    memcpy(ireply+14+12, ireply+14+16, sizeof(uint32_t));
+                    memcpy(ireply+14+16, &tmp2, sizeof(uint32_t));
 
-                    send (i, r, sizeof(struct icmp_reply), 0);
+                    uint8_t tmp3[6];
+                    memcpy(&tmp3, ireply, sizeof(tmp3));
+                    memcpy(ireply, ireply+5, sizeof(tmp3));
+                    memcpy(ireply+5, &tmp3, sizeof(tmp3));
+
+
+
+                    send (i, ireply, sizeof(unsigned char)*98, 0);
                 }
                 
                 /* Check if ARP header. */
@@ -204,7 +212,7 @@ int main()
 
                     free(r);
                 }
-
+                free(ireply);
                 free (eh);
 			}
 		}
