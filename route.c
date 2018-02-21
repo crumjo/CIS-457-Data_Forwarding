@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 #include <ifaddrs.h>
@@ -10,11 +11,68 @@
 #include <netpacket/packet.h> 
 #include <sys/socket.h> 
 #include <sys/types.h>
+#include <sys/select.h>
+#include <sys/ioctl.h>
+#include <net/if.h>
 
+struct reply
+{
+    struct ether_header eh;
+    struct ether_arp ea;
+};
+
+struct icmp_reply
+{
+    struct ether_header eh;
+    struct iphdr ip;
+    struct icmphdr x; 
+};
+
+void build_reply(struct reply* r, struct ether_header *eh, struct ether_arp *arp_frame, uint8_t dmac[6])
+{
+    r->ea.ea_hdr.ar_hrd=htons(ARPHRD_ETHER);
+    r->ea.ea_hdr.ar_pro=htons(ETH_P_IP);
+    r->ea.ea_hdr.ar_hln=ETHER_ADDR_LEN;
+    r->ea.ea_hdr.ar_pln=sizeof(in_addr_t);
+    r->ea.ea_hdr.ar_op=htons(ARPOP_REPLY);
+    memcpy(&r->ea.arp_tha, &arp_frame->arp_sha, 6);/////
+    memcpy(&r->ea.arp_tpa, &arp_frame->arp_spa, 4);
+    memcpy(&r->ea.arp_sha, &arp_frame->arp_tha, 6);
+    memcpy(&r->ea.arp_spa, &arp_frame->arp_tpa, 4);
+    
+    memcpy(&r->eh, eh, sizeof(struct ether_header));
+}
+
+void get_dst_ip(struct ifaddrs *ifaddr, struct ifaddrs *tmp, uint8_t arp_tpa[4], int socket, uint8_t dmac[6])
+{
+    struct ifreq ifr;
+    for (tmp = ifaddr; tmp; tmp = tmp->ifa_next) {
+        if (tmp->ifa_addr->sa_family==AF_INET) {
+            struct sockaddr_in* sa = (struct sockaddr_in *) tmp->ifa_addr;
+            char *addr = inet_ntoa(sa->sin_addr);
+            char arp_addr[50];
+            sprintf(arp_addr, "%u.%u.%u.%u", arp_tpa[0], arp_tpa[1],
+                                             arp_tpa[2], arp_tpa[3]);
+            
+            if (strcmp(addr, arp_addr) == 0)
+            {  
+                ifr.ifr_addr.sa_family = AF_INET;
+                memset(&ifr, 0x00, sizeof(ifr));
+
+                strcpy(ifr.ifr_name, tmp->ifa_name);
+                ioctl(socket, SIOCGIFHWADDR, &ifr);
+                for( int i = 0; i < 6; i++ )
+                {
+                    printf("%u ", (unsigned char)ifr.ifr_hwaddr.sa_data[i]);
+                }
+                printf("\n");
+            }
+        }
+    }
+}
 
 int main()
 {
-    int packet_socket;
     //get list of interface addresses. This is a linked list. Next
     //pointer is in ifa_next, interface name is in ifa_name, address is
     //in ifa_addr. You will have multiple entries in the list with the
@@ -29,9 +87,14 @@ int main()
         return 1;
     }
 
+    fd_set sockets;
+    FD_ZERO(&sockets);
+
     //have the list, loop over the list
     for (tmp = ifaddr; tmp != NULL; tmp = tmp -> ifa_next)
     {
+        int packet_socket;
+
         //Check if this is a packet address, there will be one per
         //interface.  There are IPv4 and IPv6 as well, but we don't care
         //about those for the purpose of enumerating interfaces. We can
@@ -39,92 +102,99 @@ int main()
         //of our own IP addresses
         if (tmp -> ifa_addr -> sa_family == AF_PACKET)
         {
-            printf("Interface: %s\n", tmp -> ifa_name);
-            //create a packet socket on interface r?-eth1
-            if (!strncmp(&(tmp -> ifa_name[3]),"eth1", 4))
+            printf("Creating Socket on interface %s\n", tmp -> ifa_name);
+            //create a packet socket
+            //AF_PACKET makes it a packet socket
+            //SOCK_RAW makes it so we get the entire packet
+            //could also use SOCK_DGRAM to cut off link layer header
+            //ETH_P_ALL indicates we want all (upper layer) protocols
+            //we could specify just a specific one
+            packet_socket = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+            if (packet_socket < 0)
             {
-                printf("Creating Socket on interface %s\n", tmp -> ifa_name);
-                //create a packet socket
-                //AF_PACKET makes it a packet socket
-                //SOCK_RAW makes it so we get the entire packet
-                //could also use SOCK_DGRAM to cut off link layer header
-                //ETH_P_ALL indicates we want all (upper layer) protocols
-                //we could specify just a specific one
-                packet_socket = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
-                if (packet_socket < 0)
-                {
-                    perror("socket");
-                    return 2;
-                }
-                //Bind the socket to the address, so we only get packets
-                //recieved on this specific interface. For packet sockets, the
-                //address structure is a struct sockaddr_ll (see the man page
-                //for "packet"), but of course bind takes a struct sockaddr.
-                //Here, we can use the sockaddr we got from getifaddrs (which
-                //we could convert to sockaddr_ll if we needed to)
-                if (bind(packet_socket, tmp -> ifa_addr, sizeof(struct sockaddr_ll)) == -1)
-                {
-                    perror("bind");
-                }
+                perror("socket");
+                return 2;
             }
+            
+            if (bind(packet_socket, tmp -> ifa_addr, sizeof(struct sockaddr_ll)) == -1)
+            {
+                perror("bind");
+            }
+
+            FD_SET(packet_socket, &sockets);
         }
     }
-    //loop and recieve packets. We are only looking at one interface,
-    //for the project you will probably want to look at more (to do so,
-    //a good way is to have one socket per interface and use select to
-    //see which ones have data)
     printf ("Ready to recieve now\n");
     while (1)
     {
         char buf[1500];
         struct sockaddr_ll recvaddr;
-        int recvaddrlen = sizeof(struct sockaddr_ll);
+        socklen_t recvaddrlen = sizeof(struct sockaddr_ll);
+        fd_set tmp_set = sockets;
+
+        struct timeval tv;
+		tv.tv_sec = 1;
+    	tv.tv_usec = 0;
+		select(FD_SETSIZE+1, &tmp_set, NULL, NULL, &tv);
         //we can use recv, since the addresses are in the packet, but we
         //use recvfrom because it gives us an easy way to determine if
         //this packet is incoming or outgoing (when using ETH_P_ALL, we
         //see packets in both directions. Only outgoing can be seen when
         //using a packet socket with some specific protocol)
-        int n = recvfrom(packet_socket, buf, 1500, 0, (struct sockaddr*)&recvaddr, &recvaddrlen);
-        //ignore outgoing packets (we can't disable some from being sent
-        //by the OS automatically, for example ICMP port unreachable
-        //messages, so we will just ignore them here)
-        if(recvaddr.sll_pkttype == PACKET_OUTGOING)
-            continue;
-        //start processing all others
-        //printf("Got a %d byte packet\n", n);
 
-        //what else to do is up to you, you can send packets with send,
-        //just like we used for TCP sockets (or you can use sendto, but it
-        //is not necessary, since the headers, including all addresses,
-        //need to be in the buffer you are sending)
+        for (int i=0;i<FD_SETSIZE;i++)
+		{
+			if (FD_ISSET(i, &tmp_set))
+			{
+				recvfrom(i, buf, 1500, 0, (struct sockaddr*)&recvaddr, &recvaddrlen);
+                
+                if(recvaddr.sll_pkttype == PACKET_OUTGOING)
+                    continue;
 
+                struct ether_header* eh = (struct ether_header*)malloc(sizeof(struct ether_header));
+                struct ether_arp* arp_frame = (struct ether_arp*) (buf+14);
+                /* Copy address of buf[0] to address of eh. */
+                if ((((buf[12]) << 8) + buf[13]) != ETH_P_ARP) 
+                    continue;
 
+                /* skip to the next frame if it's not an ARP REPLY */
+                if (ntohs (arp_frame->arp_op) != ARPOP_REQUEST)
+                    continue;
 
-        /** My code starts here. */
+                memcpy(eh, &buf[0], 14);
+                
+                int p_type = ntohs(eh->ether_type);
 
-        struct ether_header eh;
+                //Check if IPv4 header
+                if (p_type == 0x0800)
+                {
+                    
+                }
+                
+                /* Check if ARP header. */
+                if (p_type == 0x0806)
+                {
+                    struct ether_addr src, dst;
+                    memcpy(&dst, eh->ether_dhost, sizeof(dst));
+                    memcpy(&src, eh->ether_shost, sizeof(src));
 
-        /* Copy address of buf[0] to address of eh. */
-        memcpy(&eh, &buf[0], 14);
+                    printf("> Got an ARP packet from %d\n", i);
+                    printf(">Src : %s\n", ether_ntoa(&src));
+                    printf(">Dst : %s\n", ether_ntoa(&dst));
 
-        int p_type = ntohs(eh.ether_type);
+                    uint8_t dmac[6];
+                    struct reply *r = (struct reply*)malloc(sizeof(struct reply));
+                    get_dst_ip(ifaddr, tmp, arp_frame->arp_tpa, i, dmac);
+                    build_reply(r,eh,arp_frame, dmac);
+                    
+                    send(i, r, sizeof(struct reply), 0);
 
-        /* Check if ARP header. */
-        if (p_type == 0x806)
-        {
-            printf("> Got an ARP packet.\n");
+                    free(r);
+                }
 
-            /* Get MAC of interface. */
-            struct sockaddr_ll *s = (struct sockaddr_ll*)(ifaddr -> ifa_addr);
-            int host_mac;
-            memcpy(&host_mac, s -> sll_addr, 6);
-            printf("Unformatted MAC: %d\n", host_mac);
-        }
-
-        /** End of my code */
-
-
-
+                free (eh);
+			}
+		}
     }
     //free the interface list when we don't need it anymore
     freeifaddrs(ifaddr);
