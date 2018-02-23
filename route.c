@@ -44,6 +44,8 @@ struct icmp_reply
 
 void build_reply(struct reply* r, struct ether_header *eh, struct ether_arp *arp_frame, uint8_t dmac[6])
 {
+
+    
     r->ea.ea_hdr.ar_hrd=htons(ARPHRD_ETHER);
     r->ea.ea_hdr.ar_pro=htons(ETH_P_IP);
     r->ea.ea_hdr.ar_hln=ETHER_ADDR_LEN;
@@ -51,7 +53,11 @@ void build_reply(struct reply* r, struct ether_header *eh, struct ether_arp *arp
     r->ea.ea_hdr.ar_op=htons(ARPOP_REPLY);
     memcpy(&r->ea.arp_tha, &arp_frame->arp_sha, 6);/////
     memcpy(&r->ea.arp_tpa, &arp_frame->arp_spa, 4);
-    memcpy(&r->ea.arp_sha, &dmac, 6);
+    memcpy(&r->ea.arp_sha, dmac, 6);
+    // for( int i = 0; i < 6; i++ )
+    // {
+    //     r->ea.arp_sha[i] = dmac[i];
+    // }
     memcpy(&r->ea.arp_spa, &arp_frame->arp_tpa, 4);
     
     memcpy(&r->eh, eh, sizeof(struct ether_header));
