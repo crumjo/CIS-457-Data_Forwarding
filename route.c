@@ -16,11 +16,13 @@
 #include <net/if.h>
 #include <netinet/ip_icmp.h>
 
+
 struct reply
 {
     struct ether_header eh;
     struct ether_arp ea;
 };
+
 
 struct icmp_header
 {
@@ -35,12 +37,14 @@ struct icmp_header
 
 };
 
+
 struct icmp_reply
 {
     struct ether_header eh;
     struct iphdr ip;
     struct icmphdr ix;
 };
+
 
 void build_reply(struct reply* r, struct ether_header *eh, struct ether_arp *arp_frame, uint8_t dmac[6])
 {
@@ -51,17 +55,14 @@ void build_reply(struct reply* r, struct ether_header *eh, struct ether_arp *arp
     r->ea.ea_hdr.ar_hln=ETHER_ADDR_LEN;
     r->ea.ea_hdr.ar_pln=sizeof(in_addr_t);
     r->ea.ea_hdr.ar_op=htons(ARPOP_REPLY);
-    memcpy(&r->ea.arp_tha, &arp_frame->arp_sha, 6);/////
+
+    memcpy(&r->ea.arp_tha, &arp_frame->arp_sha, 6);
     memcpy(&r->ea.arp_tpa, &arp_frame->arp_spa, 4);
     memcpy(&r->ea.arp_sha, dmac, 6);
-    // for( int i = 0; i < 6; i++ )
-    // {
-    //     r->ea.arp_sha[i] = dmac[i];
-    // }
     memcpy(&r->ea.arp_spa, &arp_frame->arp_tpa, 4);
-    
     memcpy(&r->eh, eh, sizeof(struct ether_header));
 }
+
 
 void get_dst_ip(struct ifaddrs *ifaddr, struct ifaddrs *tmp, uint8_t arp_tpa[4], int socket, uint8_t dmac[6])
 {
@@ -93,8 +94,90 @@ void get_dst_ip(struct ifaddrs *ifaddr, struct ifaddrs *tmp, uint8_t arp_tpa[4],
     }
 }
 
+
+int lookup(char *filename, char *ip)
+{
+    FILE *in_file = fopen( filename, "r" );
+    if (in_file == NULL) {
+        fprintf(stderr, "File open failed.");
+        fclose(in_file);
+        return -1;
+    }
+
+    fseek (in_file, 0, SEEK_END);
+    int size = ftell (in_file);
+    fseek (in_file, 0, SEEK_SET);
+
+    int lines = size / 22;
+    printf ("Lines: %d\n\n", lines);
+
+    char tmp[2], line[128], iface[8];
+    int bits;
+
+    for (int i = 0; i < lines; i++)
+    {
+        if (i != (lines - 1))
+        {
+            fread(line, sizeof(char), 22, in_file);
+            memcpy(tmp, &line[9], 2);
+            bits = atoi(tmp);
+            char tmp_ip[16], comp_ip[16];
+            memcpy (comp_ip, ip, (bits / 4));
+            memcpy (tmp_ip, &line, (bits / 4));
+            printf("Passed IP: %s\n", comp_ip);
+            printf("File IP: %s\n", tmp_ip);
+
+            if (strcmp (comp_ip, tmp_ip) == 0)
+            {
+                memcpy (iface, &line[14], 7);
+                printf("Interface: %s\n", iface);
+                break;
+            }
+        }
+
+        /* Last line. */
+        else
+        {
+            printf("Here\n\n");
+            int pos = ftell (in_file);
+
+            fread(line, sizeof(char), (size - pos), in_file);
+            memcpy(tmp, &line[9], 2);
+            bits = atoi(tmp);
+            char tmp_ip[5], comp_ip[5];
+            
+            for (int i = 0; i < 4; i++)
+            {
+                comp_ip[i] = ip[i];
+            }
+            comp_ip[4] = '\0';
+
+            memcpy (tmp_ip, &line, (bits / 4));
+
+            printf ("IP from param: %s\n", ip);
+            printf("Passed IP: %s\n", comp_ip);
+            printf("File IP: %s\n", tmp_ip);
+
+            if (strcmp (comp_ip, tmp_ip) == 0)
+            {
+                char other_route[16];
+                memcpy (other_route, &line[12], 8);
+                memcpy (iface, &line[21], 7);
+                printf("Other router IP: %s \t Interface: %s\n", other_route, iface);
+            }
+            
+        }
+    }
+
+    fclose (in_file);
+    return 0; 
+}
+
+
 int main()
 {
+    lookup("r1-table.txt", "10.3.0.0");
+
     //get list of interface addresses. This is a linked list. Next
     //pointer is in ifa_next, interface name is in ifa_name, address is
     //in ifa_addr. You will have multiple entries in the list with the
