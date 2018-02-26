@@ -95,7 +95,7 @@ void get_dst_ip(struct ifaddrs *ifaddr, struct ifaddrs *tmp, uint8_t arp_tpa[4],
 }
 
 
-int lookup(char *filename, char *ip)
+int lookup(char filename[], char *ip)
 {
     FILE *in_file = fopen( filename, "r" );
     if (in_file == NULL) {
