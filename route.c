@@ -95,9 +95,11 @@ void get_dst_ip(struct ifaddrs *ifaddr, struct ifaddrs *tmp, uint8_t arp_tpa[4],
 }
 
 
-int lookup(char filename[], char *ip)
+int lookup(char *filename, char ip[])
 {
-    FILE *in_file = fopen( filename, "r" );
+	printf ("IP address: %s\n", ip);    
+
+	FILE *in_file = fopen( filename, "r" );
     if (in_file == NULL) {
         fprintf(stderr, "File open failed.");
         fclose(in_file);
@@ -176,7 +178,8 @@ int lookup(char filename[], char *ip)
 
 int main()
 {
-    lookup("r1-table.txt", "10.3.0.0");
+    char *ip_address = (char *)"10.3.0.0";
+	lookup("r1-table.txt", ip_address);
 
     //get list of interface addresses. This is a linked list. Next
     //pointer is in ifa_next, interface name is in ifa_name, address is
