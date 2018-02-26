@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string>
 #include <string.h>
 #include <errno.h>
 #include <ifaddrs.h>
@@ -95,7 +96,7 @@ void get_dst_ip(struct ifaddrs *ifaddr, struct ifaddrs *tmp, uint8_t arp_tpa[4],
 }
 
 
-int lookup(char *filename, char ip[])
+int lookup(char *filename, const char *ip)
 {
 	printf ("IP address: %s\n", ip);    
 
@@ -111,7 +112,7 @@ int lookup(char *filename, char ip[])
     fseek (in_file, 0, SEEK_SET);
 
     int lines = size / 22;
-    printf ("Lines: %d\n\n", lines);
+    //printf ("Lines: %d\n\n", lines);
 
     char tmp[2], line[128], iface[8];
     int bits;
@@ -126,8 +127,8 @@ int lookup(char *filename, char ip[])
             char tmp_ip[16], comp_ip[16];
             memcpy (comp_ip, ip, (bits / 4));
             memcpy (tmp_ip, &line, (bits / 4));
-            printf("Passed IP: %s\n", comp_ip);
-            printf("File IP: %s\n", tmp_ip);
+            //printf("Passed IP: %s\n", comp_ip);
+            //printf("File IP: %s\n", tmp_ip);
 
             if (strcmp (comp_ip, tmp_ip) == 0)
             {
@@ -140,7 +141,6 @@ int lookup(char *filename, char ip[])
         /* Last line. */
         else
         {
-            printf("Here\n\n");
             int pos = ftell (in_file);
 
             fread(line, sizeof(char), (size - pos), in_file);
@@ -156,9 +156,9 @@ int lookup(char *filename, char ip[])
 
             memcpy (tmp_ip, &line, (bits / 4));
 
-            printf ("IP from param: %s\n", ip);
-            printf("Passed IP: %s\n", comp_ip);
-            printf("File IP: %s\n", tmp_ip);
+            //printf ("IP from param: %s\n", ip);
+            //printf("Passed IP: %s\n", comp_ip);
+            //printf("File IP: %s\n", tmp_ip);
 
             if (strcmp (comp_ip, tmp_ip) == 0)
             {
@@ -178,8 +178,8 @@ int lookup(char *filename, char ip[])
 
 int main()
 {
-    char *ip_address = (char *)"10.3.0.0";
-	lookup("r1-table.txt", ip_address);
+    const char *ip_address = "10.1.0.2";
+	lookup("r2-table.txt", ip_address);
 
     //get list of interface addresses. This is a linked list. Next
     //pointer is in ifa_next, interface name is in ifa_name, address is
