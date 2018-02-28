@@ -61,7 +61,7 @@ void build_reply(struct arp_header* r, struct ether_header *eh, struct ether_arp
     memcpy(&r->eh, eh, sizeof(struct ether_header));
 }
 
-void build_request(struct arp_header* r, struct ether_header *eh, struct ether_arp *arp_frame)
+void build_request(struct arp_header* r, struct ether_header *eh, struct ether_arp *arp_frame, uint8_t hop_ip[4])
 {
     r->ea.ea_hdr.ar_hrd=htons(ARPHRD_ETHER);
     r->ea.ea_hdr.ar_pro=htons(ETH_P_IP);
@@ -69,14 +69,15 @@ void build_request(struct arp_header* r, struct ether_header *eh, struct ether_a
     r->ea.ea_hdr.ar_pln=sizeof(in_addr_t);
     r->ea.ea_hdr.ar_op=htons(ARPOP_REQUEST);
 
-    // memcpy(&r->ea.arp_tha, &arp_frame->arp_sha, 6);
-    // memcpy(&r->ea.arp_tpa, &arp_frame->arp_spa, 4);
-    // memcpy(&r->ea.arp_sha, dmac, 6);
-    // memcpy(&r->ea.arp_spa, &arp_frame->arp_tpa, 4);
+    uint8_t tmp[6];
+    for (int i = 0; i<6; i++) 
+        tmp[i] = 0;
+
+    memcpy(&r->ea.arp_sha, &arp_frame->arp_sha, 6);
+    memcpy(&r->ea.arp_spa, &arp_frame->arp_spa, 4);
+    memcpy(&r->ea.arp_tha, tmp, 6);
+    memcpy(&r->ea.arp_tpa, hop_ip, 4);
     memcpy(&r->eh, eh, sizeof(struct ether_header));
-    // &r->eh.ether_dhost = 
-    // &r->eh.ether_shost = 
-    // &r->eh.ether_type = 
 }
 
 
@@ -189,7 +190,7 @@ void lookup(char *filename, char *ip, char *iface)
     //return iface; 
 }
 
-void next_hop (char* table, char* buf, struct ifaddrs *tmp, struct ifaddrs *ifaddr, uint8_t hop_ip[4])
+void next_hop (char* table, char* buf, struct ifaddrs *tmp, struct ifaddrs *ifaddr, uint8_t hop_ip[4], struct ether_header* eh, struct ether_arp* arp_frame)
 {
     unsigned char dest_ip[4];
     for (int i = 0; i < 4; i++)
@@ -212,13 +213,29 @@ void next_hop (char* table, char* buf, struct ifaddrs *tmp, struct ifaddrs *ifad
             if (strcmp(iface, tmp->ifa_name) == 0)
             {
                 //Get IP address
-
                 struct sockaddr_in* sa = (struct sockaddr_in *) tmp->ifa_addr;
                 char *addr = inet_ntoa(sa->sin_addr);
                 printf("Next Hop interface: %s\n", iface);
                 printf("Next IP: %s\n", addr);
+                
+                inet_pton(AF_INET, addr, hop_ip);
 
-                hop_ip = (uint8_t)inet_aton(addr, sa->sin_addr);
+                struct arp_header *r = (struct arp_header*)malloc(sizeof(struct arp_header));
+                build_request(r,eh,arp_frame, hop_ip);
+
+                int packet_socket = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+                if (packet_socket < 0)
+                {
+                    perror("arp request socket");
+                    exit(1);
+                }
+                
+                if (bind(packet_socket, tmp -> ifa_addr, sizeof(struct sockaddr_ll)) == -1)
+                {
+                    perror("arp request bind");
+                }
+                
+                sendto(packet_socket, r, sizeof(struct arp_header), 0, tmp->ifa_addr, sizeof(tmp->ifa_addr));
             } 
         }       
     }
@@ -243,6 +260,7 @@ int main(int argc, char** argv)
     //address. You can use the names to match up which IPv4 address goes
     //with which MAC address.
     struct ifaddrs *ifaddr, *tmp;
+    char packet_iface[1023];
     if (getifaddrs(&ifaddr) == -1)
     {
         perror("getifaddrs");
@@ -315,9 +333,8 @@ int main(int argc, char** argv)
 
                 struct ether_header* eh = (struct ether_header*)malloc(sizeof(struct ether_header));
                 struct ether_arp* arp_frame = (struct ether_arp*) (buf+14);
-                //struct iphdr* ip = (struct iphdr*) (buf+14);
-                //struct icmphdr* x = (struct icmphdr*) (buf+14+20);
                 unsigned char* ireply = (unsigned char*)malloc(sizeof(unsigned char)*98);
+
                 memcpy(eh, &buf[0], 14);
                 
                 int p_type = ntohs(eh->ether_type);
@@ -327,12 +344,12 @@ int main(int argc, char** argv)
                 {
                     printf("got an IPv4 packet!\n");
                     uint8_t *hop_ip = (uint8_t*)malloc(sizeof(uint8_t)*4);
-                    next_hop(argv[1], buf, tmp, ifaddr, hop_ip);
+                    next_hop(argv[1], buf, tmp, ifaddr, hop_ip, eh, arp_frame);
                     //get next hop ip address
                     //convert to arp packet to send to next hop IP (ARP request)
                     
-                    struct arp_header *r = (struct arp_header*)malloc(sizeof(struct arp_header));
-                    build_request(r,eh,arp_frame);
+                    // struct arp_header *r = (struct arp_header*)malloc(sizeof(struct arp_header));
+                    // build_request(r,eh,arp_frame, hop_ip);
 
                     uint8_t tmp1 = ICMP_ECHOREPLY;
                     memcpy(ireply, &buf, 98);
