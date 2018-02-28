@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <string>
 #include <string.h>
 #include <errno.h>
 #include <ifaddrs.h>
@@ -18,7 +17,7 @@
 #include <netinet/ip_icmp.h>
 
 
-struct reply
+struct arp_header
 {
     struct ether_header eh;
     struct ether_arp ea;
@@ -47,10 +46,8 @@ struct icmp_reply
 };
 
 
-void build_reply(struct reply* r, struct ether_header *eh, struct ether_arp *arp_frame, uint8_t dmac[6])
+void build_reply(struct arp_header* r, struct ether_header *eh, struct ether_arp *arp_frame, uint8_t dmac[6])
 {
-
-    
     r->ea.ea_hdr.ar_hrd=htons(ARPHRD_ETHER);
     r->ea.ea_hdr.ar_pro=htons(ETH_P_IP);
     r->ea.ea_hdr.ar_hln=ETHER_ADDR_LEN;
@@ -64,8 +61,26 @@ void build_reply(struct reply* r, struct ether_header *eh, struct ether_arp *arp
     memcpy(&r->eh, eh, sizeof(struct ether_header));
 }
 
+void build_request(struct arp_header* r, struct ether_header *eh, struct ether_arp *arp_frame)
+{
+    r->ea.ea_hdr.ar_hrd=htons(ARPHRD_ETHER);
+    r->ea.ea_hdr.ar_pro=htons(ETH_P_IP);
+    r->ea.ea_hdr.ar_hln=ETHER_ADDR_LEN;
+    r->ea.ea_hdr.ar_pln=sizeof(in_addr_t);
+    r->ea.ea_hdr.ar_op=htons(ARPOP_REQUEST);
 
-void get_dst_ip(struct ifaddrs *ifaddr, struct ifaddrs *tmp, uint8_t arp_tpa[4], int socket, uint8_t dmac[6])
+    // memcpy(&r->ea.arp_tha, &arp_frame->arp_sha, 6);
+    // memcpy(&r->ea.arp_tpa, &arp_frame->arp_spa, 4);
+    // memcpy(&r->ea.arp_sha, dmac, 6);
+    // memcpy(&r->ea.arp_spa, &arp_frame->arp_tpa, 4);
+    memcpy(&r->eh, eh, sizeof(struct ether_header));
+    // &r->eh.ether_dhost = 
+    // &r->eh.ether_shost = 
+    // &r->eh.ether_type = 
+}
+
+
+void get_dst_mac(struct ifaddrs *ifaddr, struct ifaddrs *tmp, uint8_t arp_tpa[4], int socket, uint8_t dmac[6])
 {
     struct ifreq ifr;
     for (tmp = ifaddr; tmp; tmp = tmp->ifa_next) {
@@ -96,15 +111,14 @@ void get_dst_ip(struct ifaddrs *ifaddr, struct ifaddrs *tmp, uint8_t arp_tpa[4],
 }
 
 
-int lookup(char *filename, const char *ip)
+void lookup(char *filename, char *ip, char *iface)
 {
-	printf ("IP address: %s\n", ip);    
 
-	FILE *in_file = fopen( filename, "r" );
+    FILE *in_file = fopen( filename, "r" );
     if (in_file == NULL) {
         fprintf(stderr, "File open failed.");
         fclose(in_file);
-        return -1;
+        exit(1);
     }
 
     fseek (in_file, 0, SEEK_END);
@@ -112,9 +126,9 @@ int lookup(char *filename, const char *ip)
     fseek (in_file, 0, SEEK_SET);
 
     int lines = size / 22;
-    //printf ("Lines: %d\n\n", lines);
+    // printf ("Lines: %d\n\n", lines);
 
-    char tmp[2], line[128], iface[8];
+    char tmp[2], line[128];
     int bits;
 
     for (int i = 0; i < lines; i++)
@@ -127,20 +141,20 @@ int lookup(char *filename, const char *ip)
             char tmp_ip[16], comp_ip[16];
             memcpy (comp_ip, ip, (bits / 4));
             memcpy (tmp_ip, &line, (bits / 4));
-            //printf("Passed IP: %s\n", comp_ip);
-            //printf("File IP: %s\n", tmp_ip);
+            // printf("Passed IP: %s\n", comp_ip);
+            // printf("File IP: %s\n", tmp_ip);
 
             if (strcmp (comp_ip, tmp_ip) == 0)
             {
                 memcpy (iface, &line[14], 7);
-                printf("Interface: %s\n", iface);
+                //printf("Interface: %s\n", iface);
                 break;
             }
         }
-
         /* Last line. */
         else
         {
+            //printf("Here\n\n");
             int pos = ftell (in_file);
 
             fread(line, sizeof(char), (size - pos), in_file);
@@ -156,30 +170,70 @@ int lookup(char *filename, const char *ip)
 
             memcpy (tmp_ip, &line, (bits / 4));
 
-            //printf ("IP from param: %s\n", ip);
-            //printf("Passed IP: %s\n", comp_ip);
-            //printf("File IP: %s\n", tmp_ip);
+            // printf ("IP from param: %s\n", ip);
+            // printf("Passed IP: %s\n", comp_ip);
+            // printf("File IP: %s\n", tmp_ip);
 
             if (strcmp (comp_ip, tmp_ip) == 0)
             {
                 char other_route[16];
                 memcpy (other_route, &line[12], 8);
                 memcpy (iface, &line[21], 7);
-                printf("Other router IP: %s \t Interface: %s\n", other_route, iface);
+                //printf("Other router IP: %s \t Interface: %s\n", other_route, iface);
             }
             
         }
     }
 
     fclose (in_file);
-    return 0; 
+    //return iface; 
+}
+
+void next_hop (char* table, char* buf, struct ifaddrs *tmp, struct ifaddrs *ifaddr, uint8_t hop_ip[4])
+{
+    unsigned char dest_ip[4];
+    for (int i = 0; i < 4; i++)
+    {
+        uint8_t ip_tmp;
+        memcpy (&ip_tmp, &buf[30+i], sizeof(uint8_t));
+        memcpy (&dest_ip[i], &ip_tmp, sizeof(uint8_t));
+
+    }
+    char lookup_ip[50];
+    sprintf(lookup_ip, "%u.%u.%u.%u", dest_ip[0], dest_ip[1], dest_ip[2], dest_ip[3]);
+    //printf("Dest IP: %s\n\n", lookup_ip);
+    char* iface = (char*) malloc(sizeof(char)*15);
+    lookup(table, lookup_ip, iface);
+    //printf("%s\n", iface);
+    for (tmp = ifaddr; tmp != NULL; tmp = tmp -> ifa_next)
+    {
+        if (tmp -> ifa_addr -> sa_family == AF_INET)
+        {   
+            if (strcmp(iface, tmp->ifa_name) == 0)
+            {
+                //Get IP address
+
+                struct sockaddr_in* sa = (struct sockaddr_in *) tmp->ifa_addr;
+                char *addr = inet_ntoa(sa->sin_addr);
+                printf("Next Hop interface: %s\n", iface);
+                printf("Next IP: %s\n", addr);
+
+                hop_ip = (uint8_t)inet_aton(addr, sa->sin_addr);
+            } 
+        }       
+    }
+    free(iface);
 }
 
 
-int main()
+int main(int argc, char** argv)
 {
-    const char *ip_address = "10.1.0.2";
-	lookup("r2-table.txt", ip_address);
+    if (argc<2)
+    {
+        printf("Missing routing table\n");
+        exit(1);
+    }
+    //lookup("r1-table.txt", "10.1.1.1");
 
     //get list of interface addresses. This is a linked list. Next
     //pointer is in ifa_next, interface name is in ifa_name, address is
@@ -272,10 +326,19 @@ int main()
                 if (p_type == 0x0800)
                 {
                     printf("got an IPv4 packet!\n");
-                    uint8_t tmp = ICMP_ECHOREPLY;
+                    uint8_t *hop_ip = (uint8_t*)malloc(sizeof(uint8_t)*4);
+                    next_hop(argv[1], buf, tmp, ifaddr, hop_ip);
+                    //get next hop ip address
+                    //convert to arp packet to send to next hop IP (ARP request)
+                    
+                    struct arp_header *r = (struct arp_header*)malloc(sizeof(struct arp_header));
+                    build_request(r,eh,arp_frame);
+
+                    uint8_t tmp1 = ICMP_ECHOREPLY;
                     memcpy(ireply, &buf, 98);
-                    memcpy(ireply+14+20, &tmp, sizeof(uint8_t));
+                    memcpy(ireply+14+20, &tmp1, sizeof(uint8_t));
                     //iphdr swap
+
                     uint32_t tmp2;
                     memcpy(&tmp2,ireply+14+12, sizeof(uint32_t));
                     memcpy(ireply+14+12, ireply+14+16, sizeof(uint32_t));
@@ -286,21 +349,25 @@ int main()
                     memcpy(ireply, ireply+5, sizeof(tmp3));
                     memcpy(ireply+5, &tmp3, sizeof(tmp3));
 
-
-
                     send (i, ireply, sizeof(unsigned char)*98, 0);
                 }
+
+                /* Check if ARP header and arp reply*/
+                //Build new ethernet header with MAC from reply
+                // send to interface 
+
                 
                 /* Check if ARP header. */
+///////////////////////////////////////////////////////////ADJUST TO ARP PACKET + ARP REQUEST
                 if (p_type == 0x0806)
                 {
                     printf("Got an arp packet\n");
                     uint8_t dmac[6];
-                    struct reply *r = (struct reply*)malloc(sizeof(struct reply));
-                    get_dst_ip(ifaddr, tmp, arp_frame->arp_tpa, i, dmac);
+                    struct arp_header *r = (struct arp_header*)malloc(sizeof(struct arp_header));
+                    get_dst_mac(ifaddr, tmp, arp_frame->arp_tpa, i, dmac);
                     build_reply(r,eh,arp_frame, dmac);
                     printf("Sent an arp reply\n");
-                    send(i, r, sizeof(struct reply), 0);
+                    send(i, r, sizeof(struct arp_header), 0);
 
                     free(r);
                 }
