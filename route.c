@@ -111,6 +111,36 @@ void get_dst_mac(struct ifaddrs *ifaddr, struct ifaddrs *tmp, uint8_t arp_tpa[4]
     }
 }
 
+void get_src_mac(struct ifaddrs *ifaddr, struct ifaddrs *tmp, uint8_t if_ip[4], int socket, uint8_t if_mac[6])
+{
+     struct ifreq ifr;
+    for (tmp = ifaddr; tmp; tmp = tmp->ifa_next) {
+        if (tmp->ifa_addr->sa_family==AF_INET) {
+            struct sockaddr_in* sa = (struct sockaddr_in *) tmp->ifa_addr;
+            char *addr = inet_ntoa(sa->sin_addr);
+            char arp_addr[50];
+            sprintf(arp_addr, "%u.%u.%u.%u", if_ip[0], if_ip[1],
+                                             if_ip[2], if_ip[3]);
+            
+            if (strcmp(addr, arp_addr) == 0)
+            {  
+                ifr.ifr_addr.sa_family = AF_INET;
+                memset(&ifr, 0x00, sizeof(ifr));
+
+                strcpy(ifr.ifr_name, tmp->ifa_name);
+                ioctl(socket, SIOCGIFHWADDR, &ifr);
+                for( int i = 0; i < 6; i++ )
+                {
+                    //printf("%u ", (unsigned char)ifr.ifr_hwaddr.sa_data[i]);
+                    if_mac[i] = (uint8_t)(unsigned char)ifr.ifr_hwaddr.sa_data[i];
+                    //printf("%x ", dmac[i]);
+                }
+                //printf("\n");
+            }
+        }
+    }
+}
+
 
 void lookup(char *filename, char *ip, char *iface)
 {
@@ -190,7 +220,7 @@ void lookup(char *filename, char *ip, char *iface)
     //return iface; 
 }
 
-void next_hop (char* table, char* buf, struct ifaddrs *tmp, struct ifaddrs *ifaddr, uint8_t hop_ip[4], struct ether_header* eh, struct ether_arp* arp_frame)
+void next_hop (char* table, char* buf, struct ifaddrs *tmp, struct ifaddrs *ifaddr, uint8_t hop_ip[4], struct ether_header* eh, struct ether_arp* arp_frame, char packet_iface[1023][15])
 {
     unsigned char dest_ip[4];
     for (int i = 0; i < 4; i++)
@@ -198,7 +228,6 @@ void next_hop (char* table, char* buf, struct ifaddrs *tmp, struct ifaddrs *ifad
         uint8_t ip_tmp;
         memcpy (&ip_tmp, &buf[30+i], sizeof(uint8_t));
         memcpy (&dest_ip[i], &ip_tmp, sizeof(uint8_t));
-
     }
     char lookup_ip[50];
     sprintf(lookup_ip, "%u.%u.%u.%u", dest_ip[0], dest_ip[1], dest_ip[2], dest_ip[3]);
@@ -223,19 +252,16 @@ void next_hop (char* table, char* buf, struct ifaddrs *tmp, struct ifaddrs *ifad
                 struct arp_header *r = (struct arp_header*)malloc(sizeof(struct arp_header));
                 build_request(r,eh,arp_frame, hop_ip);
 
-                int packet_socket = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
-                if (packet_socket < 0)
+                int socket;
+                for (int i = 0; i < 1023; i++)
                 {
-                    perror("arp request socket");
-                    exit(1);
+                    if (strcmp (packet_iface[i], tmp->ifa_name) == 0)
+                    {
+                        socket = i;
+                    }
                 }
                 
-                if (bind(packet_socket, tmp -> ifa_addr, sizeof(struct sockaddr_ll)) == -1)
-                {
-                    perror("arp request bind");
-                }
-                
-                sendto(packet_socket, r, sizeof(struct arp_header), 0, tmp->ifa_addr, sizeof(tmp->ifa_addr));
+                send(socket, r, sizeof(struct arp_header), 0);
             } 
         }       
     }
@@ -260,7 +286,7 @@ int main(int argc, char** argv)
     //address. You can use the names to match up which IPv4 address goes
     //with which MAC address.
     struct ifaddrs *ifaddr, *tmp;
-    char packet_iface[1023];
+    char packet_iface[1023][15];
     if (getifaddrs(&ifaddr) == -1)
     {
         perror("getifaddrs");
@@ -300,7 +326,7 @@ int main(int argc, char** argv)
             {
                 perror("bind");
             }
-
+            strcpy (packet_iface[packet_socket], tmp->ifa_name);
             FD_SET(packet_socket, &sockets);
         }
     }
@@ -334,17 +360,17 @@ int main(int argc, char** argv)
                 struct ether_header* eh = (struct ether_header*)malloc(sizeof(struct ether_header));
                 struct ether_arp* arp_frame = (struct ether_arp*) (buf+14);
                 unsigned char* ireply = (unsigned char*)malloc(sizeof(unsigned char)*98);
+                unsigned char* irequest = (unsigned char*)malloc(sizeof(unsigned char)*98);
 
                 memcpy(eh, &buf[0], 14);
                 
                 int p_type = ntohs(eh->ether_type);
-
                 //Check if IPv4 header
                 if (p_type == 0x0800)
                 {
                     printf("got an IPv4 packet!\n");
                     uint8_t *hop_ip = (uint8_t*)malloc(sizeof(uint8_t)*4);
-                    next_hop(argv[1], buf, tmp, ifaddr, hop_ip, eh, arp_frame);
+                    next_hop(argv[1], buf, tmp, ifaddr, hop_ip, eh, arp_frame, packet_iface);
                     //get next hop ip address
                     //convert to arp packet to send to next hop IP (ARP request)
                     
@@ -378,15 +404,65 @@ int main(int argc, char** argv)
 ///////////////////////////////////////////////////////////ADJUST TO ARP PACKET + ARP REQUEST
                 if (p_type == 0x0806)
                 {
-                    printf("Got an arp packet\n");
-                    uint8_t dmac[6];
-                    struct arp_header *r = (struct arp_header*)malloc(sizeof(struct arp_header));
-                    get_dst_mac(ifaddr, tmp, arp_frame->arp_tpa, i, dmac);
-                    build_reply(r,eh,arp_frame, dmac);
-                    printf("Sent an arp reply\n");
-                    send(i, r, sizeof(struct arp_header), 0);
+                    printf("got an arp packet\n");
+                    printf("%d\n", buf[21]);
+                    if (buf[21] == ARPOP_REQUEST)
+                    {
+                        printf("Got an arp request\n");
+                        uint8_t dmac[6];
+                        struct arp_header *r = (struct arp_header*)malloc(sizeof(struct arp_header));
+                        get_dst_mac(ifaddr, tmp, arp_frame->arp_tpa, i, dmac);
+                        build_reply(r,eh,arp_frame, dmac);
+                        printf("Sent an arp reply\n");
+                        send(i, r, sizeof(struct arp_header), 0);
 
-                    free(r);
+                        free(r);
+                    }
+                    else if (buf[21] == ARPOP_REPLY)
+                    {
+                        printf("Got an arp reply\n");
+
+                        memcpy(irequest, &ireply, 98);
+                        //change to ICMP echo
+                        uint8_t tmp1 = ICMP_ECHO;
+                        memcpy(irequest+14+20, &tmp1, sizeof(uint8_t));
+                        //Flipping iphdr data back to ICMP request
+                        uint32_t tmp2;
+                        memcpy(&tmp2,irequest+14+16, sizeof(uint32_t));
+                        memcpy(irequest+14+16, irequest+14+12, sizeof(uint32_t));
+                        memcpy(irequest+14+12, &tmp2, sizeof(uint32_t));
+                        //Flipping eth header back to ICMP request
+                        uint8_t tmp3[6];
+                        memcpy(&tmp3, irequest+5, sizeof(tmp3));
+                        memcpy(irequest+5, irequest, sizeof(tmp3));
+                        memcpy(irequest, &tmp3, sizeof(tmp3));
+
+                        //change src mac address to router
+                        //get interface mac
+                        uint8_t if_mac[6];
+                        uint8_t if_ip[4];
+                        if (strcmp (argv[1], "r1-table.txt"))
+                        {
+                            if_ip[0] = 0x10;
+                            if_ip[1] = 0x00;
+                            if_ip[2] = 0x00;
+                            if_ip[3] = 0x01;
+                        }  
+                        else
+                        {
+                            if_ip[0] = 0x10;
+                            if_ip[1] = 0x00;
+                            if_ip[2] = 0x00;
+                            if_ip[3] = 0x02;
+                        }
+                        
+                        get_dst_mac (ifaddr, tmp, if_ip, i, if_mac);
+                        memcpy (irequest, &if_mac, sizeof(if_mac));
+
+                        send (i, irequest, sizeof(unsigned char)*98, 0);
+                    }
+                    
+                    
                 }
                 free(ireply);
                 free (eh);
