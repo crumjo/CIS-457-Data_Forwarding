@@ -14,6 +14,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <arpa/inet.h>
+#include "router_utility.c"
 
 
 #ifndef router_utility_h

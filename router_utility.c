@@ -1,4 +1,20 @@
 /**
+ * Router uilities to generate a checksum, add the time to live, 
+ * lookup addresses in the forwarding table, and generate
+ * ICMP error messages.
+ */
+
+#include <stdio.h>
+#include <unistd.h>
+#include "router_utility.h"
+
+#define ICMP_CODE_NET = (uint8_t) 0
+#define ICMP_CODE_HOST = (uint8_t) 1
+#define ICMP_TYPE_TIME = (uint8_t) 11
+#define ICMP_TYPE_UNREACHABLE = (uint8_t) 3
+
+
+/**
  * Calculates the internet checksum, assumes buf has been
  * padded with zeros to a 16 bit boundary. Code is from 
  * Computer Networks fifth edition.
@@ -7,11 +23,6 @@
  * @param count the size of buf in 16 bit units.
  * @return unsigned short the calculated checksum.
  */
-
-
-#include "router_utility.h"
-
-
 unsigned short cksum (unsigned short *buf, int count)
 {
     register unsigned long sum = 0;
@@ -29,19 +40,36 @@ unsigned short cksum (unsigned short *buf, int count)
     return ~(sum & 0xFFFF);
 }
 
+
+/**
+ * Time to live method that updates the time to live
+ * and sends the appropriate error message if the time
+ * to live is zero or less.
+ * 
+ * @param icmp_buf the icmp message to add TTL to.
+ * @return unsigned char * the updated icmp message.
+ */
 unsigned char* ttl (unsigned char *icmp_buf)
 {
-    //pull ttl from icmp_buf, 9th byte of ip header
+	/* Copy iphdr and 64 bits of data for error message. */
+	unsigned char data[84];
+	memcpy (&data, icmp_buf, sizeof(data));	
+	
+    /* Pull ttl from icmp_buf, 9th byte of ip header. */
     uint8_t ttl;
     memcpy(&ttl, icmp_buf+14+9, sizeof(uint8_t));
 
     ttl--;
 
+	/* Check if the packet timed out and then drop. */
     if (ttl <= 0)
     {
         //Time out. ICMP timeout reply, drop packet. -1 implies timeout
-       //icmp_error
+        //icmp_error
         //return buf with updated ttl
+		unsigned char csum[16];
+		memcpy (&csum, icmp_buf + 14 + 20 + 16, sizeof(uint16_t));
+		create_icmp_err (ICMP_TYPE_TIME, ICMP_CODE_NET, csum, data, icmp_buf);
         return icmp_buf;
     }
     else
@@ -57,6 +85,16 @@ unsigned char* ttl (unsigned char *icmp_buf)
     }
 }
 
+
+/**
+ * Looks up a routing table to return interface associated
+ * with an IP address.
+ * 
+ * @param filename the name of the routing table.
+ * @param ip the ip address to look up.
+ * @param iface the interface for the given ip.
+ * @return int a 1 if the ip is found in the routing table, -1 otherwise.
+ */
 int lookup(char *filename, char *ip, char *iface)
 {
 
@@ -67,6 +105,7 @@ int lookup(char *filename, char *ip, char *iface)
         exit(1);
     }
 
+    /* Get the size of the file. */
     fseek (in_file, 0, SEEK_END);
     int size = ftell (in_file);
     fseek (in_file, 0, SEEK_SET);
@@ -144,7 +183,16 @@ int lookup(char *filename, char *ip, char *iface)
     return -1;; 
 }
 
-int create_icmp_err (uint8_t type, uint8_t code, uint16_t cksum, unsigned char *iphdr, unsigned char *new_msg)
+
+/**
+ * Creates an icmp error message.
+ * @param type the type of icmp message.
+ * @param code host or network unreachable.
+ * @param cksum the internet checksum.
+ * @param iphdr the ip header and first 64 bits of data.
+ * @param new_msg pointer to a new allocated icmp error message.
+ */
+void create_icmp_err (uint8_t type, uint8_t code, uint16_t cksum, unsigned char *iphdr, unsigned char *new_msg)
 {
 	uint32_t zeros = 0x0000;
 
@@ -154,4 +202,5 @@ int create_icmp_err (uint8_t type, uint8_t code, uint16_t cksum, unsigned char *
 	memcpy (new_msg + 2 * sizeof(uint8_t), cksum, sizeof(uint16_t));
 	memcpy (new_msg + 4 * sizeof(uint8_t), zeros, sizeof(uint32_t));
 	memcpy (new_msg + 8 * sizeof(uint8_t), iphdr, sizeof(iphdr));
+
 }
