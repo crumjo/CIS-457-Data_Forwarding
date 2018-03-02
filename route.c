@@ -113,7 +113,7 @@ void get_dst_mac(struct ifaddrs *ifaddr, struct ifaddrs *tmp, uint8_t arp_tpa[4]
 
 void get_src_mac(struct ifaddrs *ifaddr, struct ifaddrs *tmp, uint8_t if_ip[4], int socket, uint8_t if_mac[6])
 {
-     struct ifreq ifr;
+    struct ifreq ifr;
     for (tmp = ifaddr; tmp; tmp = tmp->ifa_next) {
         if (tmp->ifa_addr->sa_family==AF_INET) {
             struct sockaddr_in* sa = (struct sockaddr_in *) tmp->ifa_addr;
@@ -377,20 +377,30 @@ int main(int argc, char** argv)
                     // struct arp_header *r = (struct arp_header*)malloc(sizeof(struct arp_header));
                     // build_request(r,eh,arp_frame, hop_ip);
 
+                    // uint8_t tmp1 = ICMP_ECHOREPLY;
+                    // memcpy(ireply, &buf, 98);
+                    // memcpy(ireply+14+20, &tmp1, sizeof(uint8_t));
+                    // //iphdr swap
+
+                    // uint32_t tmp2;
+                    // memcpy(&tmp2,ireply+14+12, sizeof(uint32_t));
+                    // memcpy(ireply+14+12, ireply+14+16, sizeof(uint32_t));
+                    // memcpy(ireply+14+16, &tmp2, sizeof(uint32_t));
+
+                    // uint8_t tmp3[6];
+                    // memcpy(&tmp3, ireply, sizeof(tmp3));
+                    // memcpy(ireply, ireply+5, sizeof(tmp3));
+                    // memcpy(ireply+5, &tmp3, sizeof(tmp3));
+
                     uint8_t tmp1 = ICMP_ECHOREPLY;
-                    memcpy(ireply, &buf, 98);
-                    memcpy(ireply+14+20, &tmp1, sizeof(uint8_t));
-                    //iphdr swap
+                    /* Swap src mac with router mac. */
+                    uint8_t if_mac[6];
+                    get_src_mac(ifaddr, tmp, arp_frame -> arp_tpa, i, if_mac);
+                    memcpy (ireply, &buf, 98);
+                    memcpy (ireply + 14, if_mac, 6 * sizeof(uint8_t));
 
-                    uint32_t tmp2;
-                    memcpy(&tmp2,ireply+14+12, sizeof(uint32_t));
-                    memcpy(ireply+14+12, ireply+14+16, sizeof(uint32_t));
-                    memcpy(ireply+14+16, &tmp2, sizeof(uint32_t));
-
-                    uint8_t tmp3[6];
-                    memcpy(&tmp3, ireply, sizeof(tmp3));
-                    memcpy(ireply, ireply+5, sizeof(tmp3));
-                    memcpy(ireply+5, &tmp3, sizeof(tmp3));
+                    /* Change code to reply. */
+                    memcpy (ireply + 14 + 20, &tmp1, sizeof(uint8_t));
 
                     send (i, ireply, sizeof(unsigned char)*98, 0);
                 }
