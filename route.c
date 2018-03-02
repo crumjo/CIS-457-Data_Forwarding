@@ -129,7 +129,7 @@ void get_src_mac(struct ifaddrs *ifaddr, struct ifaddrs *tmp, uint8_t if_ip[4], 
 
 
 
-void next_hop (char* table, char* buf, struct ifaddrs *tmp, struct ifaddrs *ifaddr, uint8_t hop_ip[4], struct ether_header* eh, struct ether_arp* arp_frame, char packet_iface[1023][15])
+void next_hop (char* table, char* buf, struct ifaddrs *tmp, struct ifaddrs *ifaddr, uint8_t hop_ip[4], struct ether_header* eh, struct ether_arp* arp_frame, char packet_iface[1023][15], int recvsocket)
 {
     //passes in table associated with router, interface looping, the destination IP, and a list of interfaces matched with sockets
     unsigned char dest_ip[4];
@@ -147,43 +147,56 @@ void next_hop (char* table, char* buf, struct ifaddrs *tmp, struct ifaddrs *ifad
     //allocate string for interface
     char* iface = (char*) malloc(sizeof(char)*15);
     //gets interface from lookup table
-    lookup(table, lookup_ip, iface);
-    printf("Interface: %s\n", iface);
-    for (tmp = ifaddr; tmp != NULL; tmp = tmp -> ifa_next)
+    int n = lookup(table, lookup_ip, iface);
+    //if lookup fails send icmp_error msg
+    if ( n < 0 )
     {
-        if (tmp -> ifa_addr -> sa_family == AF_INET)
-        {   
-            //loop through interfaces until reaching the next hop interface
-            if (strcmp(iface, tmp->ifa_name) == 0)
-            {
-                //Get IP address
-                struct sockaddr_in* sa = (struct sockaddr_in *) tmp->ifa_addr;
-                char *addr = inet_ntoa(sa->sin_addr);
-                //pull next ip address from interface
-                printf("Next Hop interface: %s\n", iface);
-                printf("Next IP: %s\n", addr);
-                
-                inet_pton(AF_INET, addr, hop_ip);
-                //build arp request from next ip to get dest mac
-                struct arp_header *r = (struct arp_header*)malloc(sizeof(struct arp_header));
-                build_request(r,eh,arp_frame, hop_ip);
-
-                printf("Sent an ARP request\n");
-
-                //send over the correct socket
-                int socket;
-                for (int i = 0; i < 1023; i++)
-                {
-                    if (strcmp (packet_iface[i], tmp->ifa_name) == 0)
-                    {
-                        socket = i;
-                    }
-                }
-                
-                send(socket, r, sizeof(struct arp_header), 0);
-            } 
-        }       
+        uint16_t cksum = buf+14+10;
+        unsigned char *iphd;
+        memcpy (iphd, buf+14, sizeof(unsigned char)*20);
+        buf = create_icmp_err(ICMP_DEST_UNREACH, 7, cksum,iphd, buf);
+        send(recvsocket, &buf, sizeof(buf), 0);
     }
+    else
+    {
+        printf("Interface: %s\n", iface);
+        for (tmp = ifaddr; tmp != NULL; tmp = tmp -> ifa_next)
+        {
+            if (tmp -> ifa_addr -> sa_family == AF_INET)
+            {   
+                //loop through interfaces until reaching the next hop interface
+                if (strcmp(iface, tmp->ifa_name) == 0)
+                {
+                    //Get IP address
+                    struct sockaddr_in* sa = (struct sockaddr_in *) tmp->ifa_addr;
+                    char *addr = inet_ntoa(sa->sin_addr);
+                    //pull next ip address from interface
+                    printf("Next Hop interface: %s\n", iface);
+                    printf("Next IP: %s\n", addr);
+                    
+                    inet_pton(AF_INET, addr, hop_ip);
+                    //build arp request from next ip to get dest mac
+                    struct arp_header *r = (struct arp_header*)malloc(sizeof(struct arp_header));
+                    build_request(r,eh,arp_frame, hop_ip);
+
+                    printf("Sent an ARP request\n");
+
+                    //send over the correct socket
+                    int socket;
+                    for (int i = 0; i < 1023; i++)
+                    {
+                        if (strcmp (packet_iface[i], tmp->ifa_name) == 0)
+                        {
+                            socket = i;
+                        }
+                    }
+                    
+                    send(socket, r, sizeof(struct arp_header), 0);
+                } 
+            }       
+        }
+    }
+    
     free(iface);
 }
 
@@ -293,7 +306,7 @@ int main(int argc, char** argv)
                     //check if ICMP echo request, if so and not destination, calculate next hop
                     if (buf+14+20 == ICMP_ECHO)
                     {
-                        next_hop(argv[1], buf, tmp, ifaddr, hop_ip, eh, arp_frame, packet_iface);
+                        next_hop(argv[1], buf, tmp, ifaddr, hop_ip, eh, arp_frame, packet_iface, i);
                     }
                     else if (buf+14+20 == ICMP_ECHOREPLY)
                     {
