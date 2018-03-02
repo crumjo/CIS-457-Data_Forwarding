@@ -16,36 +16,14 @@
 #include <net/if.h>
 #include <netinet/ip_icmp.h>
 
-
+//custom arp_header, combine ether_header and ether_arp
 struct arp_header
 {
     struct ether_header eh;
     struct ether_arp ea;
 };
 
-
-struct icmp_header
-{
-    u_int8_t type;		/* message type */
-    u_int8_t code;		/* type sub-code */
-    u_int16_t checksum;
-    u_int16_t	id;
-    u_int16_t	sequence;
-    u_int32_t	gateway;	/* gateway address */
-    u_int16_t	__unused;
-    u_int16_t	mtu;
-
-};
-
-
-struct icmp_reply
-{
-    struct ether_header eh;
-    struct iphdr ip;
-    struct icmphdr ix;
-};
-
-
+//builds an arp reply
 void build_reply(struct arp_header* r, struct ether_header *eh, struct ether_arp *arp_frame, uint8_t dmac[6])
 {
     r->ea.ea_hdr.ar_hrd=htons(ARPHRD_ETHER);
@@ -53,31 +31,38 @@ void build_reply(struct arp_header* r, struct ether_header *eh, struct ether_arp
     r->ea.ea_hdr.ar_hln=ETHER_ADDR_LEN;
     r->ea.ea_hdr.ar_pln=sizeof(in_addr_t);
     r->ea.ea_hdr.ar_op=htons(ARPOP_REPLY);
-
+    //sets target ip and mac to original source for arp reply
+    //sets source ip and mac to the routers ip and mac
     memcpy(&r->ea.arp_tha, &arp_frame->arp_sha, 6);
     memcpy(&r->ea.arp_tpa, &arp_frame->arp_spa, 4);
     memcpy(&r->ea.arp_sha, dmac, 6);
     memcpy(&r->ea.arp_spa, &arp_frame->arp_tpa, 4);
     memcpy(&r->eh, eh, sizeof(struct ether_header));
 }
-
+// builds arp request
 void build_request(struct arp_header* r, struct ether_header *eh, struct ether_arp *arp_frame, uint8_t hop_ip[4])
 {
+    //sets options, arp_request
     r->ea.ea_hdr.ar_hrd=htons(ARPHRD_ETHER);
     r->ea.ea_hdr.ar_pro=htons(ETH_P_IP);
     r->ea.ea_hdr.ar_hln=ETHER_ADDR_LEN;
     r->ea.ea_hdr.ar_pln=sizeof(in_addr_t);
     r->ea.ea_hdr.ar_op=htons(ARPOP_REQUEST);
 
+    //zero out target mac
     uint8_t tmp[6];
     for (int i = 0; i<6; i++) 
         tmp[i] = 0;
-
+    //set source ip and mac to router ip and mac
+    //sets target ip to the next hops ip (obtained from lookup/next hop function) and zeros target mac
     memcpy(&r->ea.arp_sha, &arp_frame->arp_sha, 6);
     memcpy(&r->ea.arp_spa, &arp_frame->arp_spa, 4);
     memcpy(&r->ea.arp_tha, tmp, 6);
     memcpy(&r->ea.arp_tpa, hop_ip, 4);
+    //copy ether header in
     memcpy(&r->eh, eh, sizeof(struct ether_header));
+    //sets ether type to ARP
+    r->eh.ether_type = ntohs(2054);
 }
 
 
@@ -91,16 +76,18 @@ void get_dst_mac(struct ifaddrs *ifaddr, struct ifaddrs *tmp, uint8_t arp_tpa[4]
             char arp_addr[50];
             sprintf(arp_addr, "%u.%u.%u.%u", arp_tpa[0], arp_tpa[1],
                                              arp_tpa[2], arp_tpa[3]);
-            
+            //cycles through interfaces and checks against target ip
             if (strcmp(addr, arp_addr) == 0)
             {  
                 ifr.ifr_addr.sa_family = AF_INET;
                 memset(&ifr, 0x00, sizeof(ifr));
-
+                //sets ifr values to proper levels to use on ioctl
                 strcpy(ifr.ifr_name, tmp->ifa_name);
                 ioctl(socket, SIOCGIFHWADDR, &ifr);
+                //pulls hardware mac from socket using ioctl
                 for( int i = 0; i < 6; i++ )
                 {
+                    //updates dmac to the destination mac. USED FOR APR REPLY
                     //printf("%u ", (unsigned char)ifr.ifr_hwaddr.sa_data[i]);
                     dmac[i] = (uint8_t)(unsigned char)ifr.ifr_hwaddr.sa_data[i];
                     //printf("%x ", dmac[i]);
@@ -121,137 +108,69 @@ void get_src_mac(struct ifaddrs *ifaddr, struct ifaddrs *tmp, uint8_t if_ip[4], 
             char arp_addr[50];
             sprintf(arp_addr, "%u.%u.%u.%u", if_ip[0], if_ip[1],
                                              if_ip[2], if_ip[3]);
-            
+            //compares interface address against the destination address
             if (strcmp(addr, arp_addr) == 0)
             {  
                 ifr.ifr_addr.sa_family = AF_INET;
                 memset(&ifr, 0x00, sizeof(ifr));
-
+                //sets ifr for ioctl
                 strcpy(ifr.ifr_name, tmp->ifa_name);
                 ioctl(socket, SIOCGIFHWADDR, &ifr);
                 for( int i = 0; i < 6; i++ )
                 {
-                    //printf("%u ", (unsigned char)ifr.ifr_hwaddr.sa_data[i]);
+                    //sets the mac address to results from ioctl
                     if_mac[i] = (uint8_t)(unsigned char)ifr.ifr_hwaddr.sa_data[i];
-                    //printf("%x ", dmac[i]);
                 }
-                //printf("\n");
             }
         }
     }
 }
 
 
-void lookup(char *filename, char *ip, char *iface)
-{
 
-    FILE *in_file = fopen( filename, "r" );
-    if (in_file == NULL) {
-        fprintf(stderr, "File open failed.");
-        fclose(in_file);
-        exit(1);
-    }
-
-    fseek (in_file, 0, SEEK_END);
-    int size = ftell (in_file);
-    fseek (in_file, 0, SEEK_SET);
-
-    int lines = size / 22;
-    // printf ("Lines: %d\n\n", lines);
-
-    char tmp[2], line[128];
-    int bits;
-
-    for (int i = 0; i < lines; i++)
-    {
-        if (i != (lines - 1))
-        {
-            fread(line, sizeof(char), 22, in_file);
-            memcpy(tmp, &line[9], 2);
-            bits = atoi(tmp);
-            char tmp_ip[16], comp_ip[16];
-            memcpy (comp_ip, ip, (bits / 4));
-            memcpy (tmp_ip, &line, (bits / 4));
-            // printf("Passed IP: %s\n", comp_ip);
-            // printf("File IP: %s\n", tmp_ip);
-
-            if (strcmp (comp_ip, tmp_ip) == 0)
-            {
-                memcpy (iface, &line[14], 7);
-                //printf("Interface: %s\n", iface);
-                break;
-            }
-        }
-        /* Last line. */
-        else
-        {
-            //printf("Here\n\n");
-            int pos = ftell (in_file);
-
-            fread(line, sizeof(char), (size - pos), in_file);
-            memcpy(tmp, &line[9], 2);
-            bits = atoi(tmp);
-            char tmp_ip[5], comp_ip[5];
-            
-            for (int i = 0; i < 4; i++)
-            {
-                comp_ip[i] = ip[i];
-            }
-            comp_ip[4] = '\0';
-
-            memcpy (tmp_ip, &line, (bits / 4));
-
-            // printf ("IP from param: %s\n", ip);
-            // printf("Passed IP: %s\n", comp_ip);
-            // printf("File IP: %s\n", tmp_ip);
-
-            if (strcmp (comp_ip, tmp_ip) == 0)
-            {
-                char other_route[16];
-                memcpy (other_route, &line[12], 8);
-                memcpy (iface, &line[21], 7);
-                //printf("Other router IP: %s \t Interface: %s\n", other_route, iface);
-            }
-            
-        }
-    }
-
-    fclose (in_file);
-    //return iface; 
-}
 
 void next_hop (char* table, char* buf, struct ifaddrs *tmp, struct ifaddrs *ifaddr, uint8_t hop_ip[4], struct ether_header* eh, struct ether_arp* arp_frame, char packet_iface[1023][15])
 {
+    //passes in table associated with router, interface looping, the destination IP, and a list of interfaces matched with sockets
     unsigned char dest_ip[4];
     for (int i = 0; i < 4; i++)
     {
+        //pull op ip into dest_ip
         uint8_t ip_tmp;
         memcpy (&ip_tmp, &buf[30+i], sizeof(uint8_t));
         memcpy (&dest_ip[i], &ip_tmp, sizeof(uint8_t));
     }
+    //copy IP into string
     char lookup_ip[50];
     sprintf(lookup_ip, "%u.%u.%u.%u", dest_ip[0], dest_ip[1], dest_ip[2], dest_ip[3]);
     //printf("Dest IP: %s\n\n", lookup_ip);
+    //allocate string for interface
     char* iface = (char*) malloc(sizeof(char)*15);
+    //gets interface from lookup table
     lookup(table, lookup_ip, iface);
-    //printf("%s\n", iface);
+    printf("Interface: %s\n", iface);
     for (tmp = ifaddr; tmp != NULL; tmp = tmp -> ifa_next)
     {
         if (tmp -> ifa_addr -> sa_family == AF_INET)
         {   
+            //loop through interfaces until reaching the next hop interface
             if (strcmp(iface, tmp->ifa_name) == 0)
             {
                 //Get IP address
                 struct sockaddr_in* sa = (struct sockaddr_in *) tmp->ifa_addr;
                 char *addr = inet_ntoa(sa->sin_addr);
+                //pull next ip address from interface
                 printf("Next Hop interface: %s\n", iface);
                 printf("Next IP: %s\n", addr);
                 
                 inet_pton(AF_INET, addr, hop_ip);
-
+                //build arp request from next ip to get dest mac
                 struct arp_header *r = (struct arp_header*)malloc(sizeof(struct arp_header));
                 build_request(r,eh,arp_frame, hop_ip);
 
+                printf("Sent an ARP request\n");
+
+                //send over the correct socket
                 int socket;
                 for (int i = 0; i < 1023; i++)
                 {
@@ -326,6 +245,7 @@ int main(int argc, char** argv)
             {
                 perror("bind");
             }
+            //copy interface to entry in array equivalent to its socket. For sending out on same socket later
             strcpy (packet_iface[packet_socket], tmp->ifa_name);
             FD_SET(packet_socket, &sockets);
         }
@@ -370,52 +290,39 @@ int main(int argc, char** argv)
                 {
                     printf("got an IPv4 packet!\n");
                     uint8_t *hop_ip = (uint8_t*)malloc(sizeof(uint8_t)*4);
-                    next_hop(argv[1], buf, tmp, ifaddr, hop_ip, eh, arp_frame, packet_iface);
-                    //get next hop ip address
-                    //convert to arp packet to send to next hop IP (ARP request)
-                    
-                    // struct arp_header *r = (struct arp_header*)malloc(sizeof(struct arp_header));
-                    // build_request(r,eh,arp_frame, hop_ip);
+                    //check if ICMP echo request, if so and not destination, calculate next hop
+                    if (buf+14+20 == ICMP_ECHO)
+                    {
+                        next_hop(argv[1], buf, tmp, ifaddr, hop_ip, eh, arp_frame, packet_iface);
+                    }
+                    else if (buf+14+20 == ICMP_ECHOREPLY)
+                    {
+                        uint8_t tmp1 = ICMP_ECHOREPLY;
+                        memcpy(ireply, &buf, 98);
+                        memcpy(ireply+14+20, &tmp1, sizeof(uint8_t));
+                        //iphdr swap
 
-                    // uint8_t tmp1 = ICMP_ECHOREPLY;
-                    // memcpy(ireply, &buf, 98);
-                    // memcpy(ireply+14+20, &tmp1, sizeof(uint8_t));
-                    // //iphdr swap
+                        uint32_t tmp2;
+                        memcpy(&tmp2,ireply+14+12, sizeof(uint32_t));
+                        memcpy(ireply+14+12, ireply+14+16, sizeof(uint32_t));
+                        memcpy(ireply+14+16, &tmp2, sizeof(uint32_t));
+                        //ether header swap
+                        uint8_t tmp3[6];
+                        memcpy(&tmp3, ireply, sizeof(tmp3));
+                        memcpy(ireply, ireply+5, sizeof(tmp3));
+                        memcpy(ireply+5, &tmp3, sizeof(tmp3));
 
-                    // uint32_t tmp2;
-                    // memcpy(&tmp2,ireply+14+12, sizeof(uint32_t));
-                    // memcpy(ireply+14+12, ireply+14+16, sizeof(uint32_t));
-                    // memcpy(ireply+14+16, &tmp2, sizeof(uint32_t));
-
-                    // uint8_t tmp3[6];
-                    // memcpy(&tmp3, ireply, sizeof(tmp3));
-                    // memcpy(ireply, ireply+5, sizeof(tmp3));
-                    // memcpy(ireply+5, &tmp3, sizeof(tmp3));
-
-                    uint8_t tmp1 = ICMP_ECHOREPLY;
-                    /* Swap src mac with router mac. */
-                    uint8_t if_mac[6];
-                    get_src_mac(ifaddr, tmp, arp_frame -> arp_tpa, i, if_mac);
-                    memcpy (ireply, &buf, 98);
-                    memcpy (ireply + 14, if_mac, 6 * sizeof(uint8_t));
-
-                    /* Change code to reply. */
-                    memcpy (ireply + 14 + 20, &tmp1, sizeof(uint8_t));
-
-                    send (i, ireply, sizeof(unsigned char)*98, 0);
+                        send (i, ireply, sizeof(unsigned char)*98, 0);
+                    }
+                    else
+                    {
+                        //icmp error message created from router_utility.c
+                        //if not dest mac, send arp request to get destination
+                    }
                 }
 
-                /* Check if ARP header and arp reply*/
-                //Build new ethernet header with MAC from reply
-                // send to interface 
-
-                
-                /* Check if ARP header. */
-///////////////////////////////////////////////////////////ADJUST TO ARP PACKET + ARP REQUEST
                 if (p_type == 0x0806)
                 {
-                    printf("got an arp packet\n");
-                    printf("%d\n", buf[21]);
                     if (buf[21] == ARPOP_REQUEST)
                     {
                         printf("Got an arp request\n");
@@ -431,8 +338,8 @@ int main(int argc, char** argv)
                     else if (buf[21] == ARPOP_REPLY)
                     {
                         printf("Got an arp reply\n");
-
-                        memcpy(irequest, &ireply, 98);
+                        //send ICMP request to next destination based on arp reply
+                        memcpy(irequest, &buf, 98);
                         //change to ICMP echo
                         uint8_t tmp1 = ICMP_ECHO;
                         memcpy(irequest+14+20, &tmp1, sizeof(uint8_t));
@@ -446,29 +353,37 @@ int main(int argc, char** argv)
                         memcpy(&tmp3, irequest+5, sizeof(tmp3));
                         memcpy(irequest+5, irequest, sizeof(tmp3));
                         memcpy(irequest, &tmp3, sizeof(tmp3));
+                        
+                        //set to IPv4 header
+                        uint16_t tmp4 = ntohs(2048);
+                        memcpy (irequest+12, &tmp4, sizeof(uint16_t));
 
                         //change src mac address to router
                         //get interface mac
                         uint8_t if_mac[6];
                         uint8_t if_ip[4];
+                        //hard code router ip
                         if (strcmp (argv[1], "r1-table.txt"))
                         {
-                            if_ip[0] = 0x10;
-                            if_ip[1] = 0x00;
-                            if_ip[2] = 0x00;
-                            if_ip[3] = 0x01;
+                            if_ip[0] = htons(0x10);
+                            if_ip[1] = htons(0x00);
+                            if_ip[2] = htons(0x00);
+                            if_ip[3] = htons(0x02);
                         }  
                         else
                         {
-                            if_ip[0] = 0x10;
-                            if_ip[1] = 0x00;
-                            if_ip[2] = 0x00;
-                            if_ip[3] = 0x02;
+                            if_ip[0] = htons(0x10);
+                            if_ip[1] = htons(0x00);
+                            if_ip[2] = htons(0x00);
+                            if_ip[3] = htons(0x01);
                         }
-                        
-                        get_dst_mac (ifaddr, tmp, if_ip, i, if_mac);
+                        //get router mac address
+                        get_src_mac (ifaddr, tmp, if_ip, i, if_mac);
+                        // printf("Next Hop MAC: %x:%x:%x:%x:%x:%x\n", if_mac[0], if_mac[1], if_mac[2],
+                        //                             if_mac[3], if_mac[4], if_mac[5]);
+                        //copy mac into eth header
                         memcpy (irequest, &if_mac, sizeof(if_mac));
-
+                        //send icmp request out
                         send (i, irequest, sizeof(unsigned char)*98, 0);
                     }
                     
